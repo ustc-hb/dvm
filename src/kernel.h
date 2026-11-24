@@ -103,6 +103,8 @@ class VKernel {
   std::string dump_str_;
 };
 
+class DupTilingSchGen;
+
 class VectorKernel : public VKernel {
  public:
   explicit VectorKernel(KernelType ktype, uint32_t flags) : VKernel(ktype, flags) {
@@ -112,7 +114,7 @@ class VectorKernel : public VKernel {
     // Reserve the zero instruction terminator before Mix calls TileCollect.
     tile_info_.code_reserve = sizeof(uint64_t);
   }
-  ~VectorKernel() override = default;
+  ~VectorKernel() override;
 
   void Dump(std::ostringstream &oss, const std::string &indent, bool rgraph) override;
 
@@ -139,6 +141,19 @@ class VectorKernel : public VKernel {
     if (unlikely(!tile_size_)) {
       ProcessIdle();
       return 0;
+    }
+    // Degenerate tiling (e.g. a prime lead space where GetDivision finds no usable
+    // divisor) would fall back to per-element tiles. Recover the same way the spec
+    // vector kernel does: split the lead space into a block aligned main body and a
+    // small tail, each with its own tiling.
+    if (!(flags_ & K_FLAG_DIS_DUP_TILING)) {
+      int64_t tile_size_limit = AnalyzeTileSizeLimit();
+      TileUpdate update;
+      ShapeTiling(tile_size_limit, core_limit, update);
+      if (update.tile_size * 8 < tile_size_limit && update.tile_num > 256 && tile_region_.depth > 1 &&
+          DupTilingGen(tile_region_, update.tile_size, tile_size_limit) != -1) {
+        return 0;
+      }
     }
     return DoCodeGenInner(core_limit);
   }
@@ -234,6 +249,7 @@ class VectorKernel : public VKernel {
   const ShardParam *shard_{nullptr};
 
   VisitCoder *visit_;
+  DupTilingSchGen *dup_gen_{nullptr};
 
   uint64_t local_mem_size_;
   union {
@@ -283,6 +299,7 @@ class VectorKernel : public VKernel {
   int64_t Analyze();
   int64_t TileSizeLimit(int64_t live_peak);
   void ShapeTiling(int64_t size_limit, int64_t core_limit, TileUpdate &update);
+  int64_t DupTilingGen(const TileRegion &region, int64_t tile_size, int64_t tile_size_limit);
   template <bool dyn_shape>
   void Optimize(std::vector<NDObject *> &objects, std::vector<NDObject *> &mng) {
     if (auto opt = g_system.pass_opt_) {
@@ -358,7 +375,6 @@ class VKernelS : public VectorKernel {
   void BrokerInit();
   bool BrokerAffine();
   uint64_t BrokerCodeGen(VKernel **hold_kernel);
-  int64_t DupTilingGen(const TileRegion &region, int64_t tile_size, int64_t tile_size_limit);
 
   void Clear() {
     code_.Clear();
@@ -378,7 +394,6 @@ class VKernelS : public VectorKernel {
   int last_broker_;
   VKernel *stage_kernel_{nullptr};
   SchGenHelper *sch_gen_{nullptr};
-  DupTilingSchGen *dup_gen_{nullptr};
 
   struct DimTile {
     int start;

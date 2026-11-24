@@ -2101,7 +2101,6 @@ void VectorKernel::ProcessIdle() {
 VKernelS::~VKernelS() {
   delete stage_kernel_;
   delete sch_gen_;
-  delete dup_gen_;
   for (auto op : build_ops_) {
     delete op;
   }
@@ -2149,7 +2148,9 @@ uint64_t VKernelS::CodeGen() {
   return TileGen(live_peak, core_limit);
 }
 
-int64_t VKernelS::DupTilingGen(const TileRegion &region, int64_t tile_size, int64_t tile_size_limit) {
+VectorKernel::~VectorKernel() { delete dup_gen_; }
+
+int64_t VectorKernel::DupTilingGen(const TileRegion &region, int64_t tile_size, int64_t tile_size_limit) {
   if (dup_gen_ == nullptr) {
     for (auto op : static_ops_) {
       if (!static_cast<NDAccess *>(op)->IsSupportView()) {
